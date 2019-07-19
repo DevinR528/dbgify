@@ -1,8 +1,7 @@
-#[macro_use]
 use dbgify::*;
 
-#[dbgify]
 fn main() {
+    #[dbgify]
     fn test(x: &mut String) {
         bp!();
         x.push_str(" world");
@@ -11,6 +10,4 @@ fn main() {
     let mut x = "hello".to_string();
 
     test(&mut x);
-
-    println!("{}", x)
 }

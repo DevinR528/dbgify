@@ -2,12 +2,19 @@
 name = "derive-dbg"
 version = "0.1.0"
 authors = ["Devin R <devin.ragotzy@gmail.com>"]
+license = "MIT/Apache-2.0"
+description = "Rust step wise debugging as a macro!" 
+repository = "https://github.com/DevinR528/dbgify"
+keywords = ["debug", "breakpoint", "step-wise", "tab-complete", "macro"]
+categories = ["development-tools", "development-tools::debugging"]
 edition = "2018"
 
 [dependencies]
 syn= { version="0.15", features=["derive", "parsing", "printing", "extra-traits", "full", "visit-mut", "clone-impls"] }
 proc-macro2="0.4"
 quote="0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [lib]
 proc-macro = true
