@@ -4,14 +4,15 @@
 
 use std::collections::HashMap;
 
-use crossterm::{input, InputEvent, TerminalColor, TerminalInput};
+use console::{Key, Term};
 use serde::{Deserialize, Serialize};
 use serde_json;
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
-fn term_input(term: &TerminalInput) -> () {}
+fn term_input(term: &Term) -> () {}
 
-pub struct Cb(pub std::boxed::Box<(dyn std::ops::Fn())>);
-impl std::ops::Deref for Cb {
+pub struct PrintFn(pub std::boxed::Box<(dyn std::ops::Fn())>);
+impl std::ops::Deref for PrintFn {
     type Target = (dyn Fn());
 
     fn deref(&self) -> &Self::Target {
@@ -23,25 +24,38 @@ impl std::ops::Deref for Cb {
 pub struct DebugCollect {
     pub args: HashMap<String, String>,
 }
-impl DebugCollect {
-    pub fn new() -> Self {
+impl Default for DebugCollect {
+    fn default() -> Self {
         DebugCollect {
-            args: HashMap::default(),
+            args: Default::default(),
         }
     }
+}
+impl DebugCollect {
     pub fn deserialize(s: &str) -> Self {
         let d: DebugCollect = serde_json::from_str(s).unwrap();
         d
     }
-    pub fn step(&self, cbs: &HashMap<String, Cb>) -> std::io::Result<()> {
+    pub fn step(&self, cbs: &HashMap<String, PrintFn>) -> std::io::Result<()> {
         println!("type var name or tab to auto-complete");
         let print_loop = || -> std::io::Result<bool> {
-            let mut input = crossterm::input();
+            // put this in struct
+            let mut input = Term::stdout();
             let line = input.read_line()?;
             // if var is saved then print value
             if let Some(_) = self.args.get(&line) {
                 // then check if in scope?
-                (*cbs.get(&line).expect("closure map should = vars map BUG"))();
+                let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+                stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+
+                if let Some(cb) = cbs.get(&line) {
+                    cb();
+                } else {
+                    stdout.reset()?;
+                    eprintln!("closure map should = vars map BUG");
+                }
+
+                stdout.reset()?;
                 Ok(true)
             } else {
                 println!("could not find variable '{}' in scope", line);

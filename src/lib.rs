@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-pub use crossterm;
+pub use console;
 pub use serde::{Deserialize, Serialize};
 pub use serde_json;
 

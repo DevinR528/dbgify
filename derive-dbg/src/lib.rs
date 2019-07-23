@@ -6,7 +6,6 @@ extern crate proc_macro;
 
 use std::collections::HashMap;
 
-use crossterm;
 use proc_macro::TokenStream;
 use proc_macro2 as pc2;
 use proc_macro2::Span;
@@ -84,7 +83,7 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     // println!("{:#?}", func);
     insert_bp(&mut func.block.stmts);
 
-    let mut dbg = dbg_collect::DebugCollect::new();
+    let mut dbg = dbg_collect::DebugCollect::default();
     let mut p_args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
 
     for arg in func.decl.inputs.iter_mut() {
@@ -151,13 +150,13 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     func.block = Box::new(parse_quote! ({
         let __result = (|| #ret {
 
-            let mut print_map: std::collections::HashMap<String, Cb> = std::collections::HashMap::new();
+            let mut print_map: std::collections::HashMap<String, PrintFn> = std::collections::HashMap::new();
             #(
                 // must re-bind or borrow check complains
                 // and to move into closure must clone
                 let #capt_arg = #arg_id.clone();
 
-                let print_fn = dbg_collect::Cb(Box::new(move || println!("{}", #ca_clone)));
+                let print_fn = dbg_collect::PrintFn(Box::new(move || println!("{}", #ca_clone)));
 
                 print_map.insert(#arg_str.into(), print_fn);
             )*
