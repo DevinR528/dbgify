@@ -2,7 +2,7 @@ use dbgify::*;
 
 fn main() {
     #[dbgify]
-    fn test(x: &mut String) {
+    fn test<'a>(x: &'a mut String) {
         let _y = 0;
         bp!();
         x.push_str(" world");

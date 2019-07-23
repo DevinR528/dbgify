@@ -13,34 +13,91 @@ use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use syn::{parse_macro_input, punctuated::Punctuated, token::Comma, ItemFn};
+use syn::{parse_macro_input, parse_quote, punctuated::Punctuated, token::Comma, ItemFn, Token};
 
-use dbg_collect::*;
+use dbg_collect;
 
-fn expand_ty() {}
+fn expand_ty(path: &syn::Path) -> Option<syn::Ident> {
+    let syn::Path { segments, .. } = path;
+    if let Some(ps) = segments.first() {
+        Some(ps.value().ident.clone())
+    } else {
+        None
+    }
+}
+
+fn capture_local(stmts: &Vec<syn::Stmt>) {
+    println!("{:#?}", stmts);
+}
+
+/// Insert step debug code in place of bp!()
+///
+/// Examples
+///
+/// ```
+/// fn fake_main() {
+///     let mut x = 0;
+///     bp!();
+///     x = 10;
+/// }
+/// ```
+/// allows you to inspect every change in the value of x or any other argument,
+/// local, or captured variable.
+fn insert_bp(stmts: &mut Vec<syn::Stmt>) {
+    stmts.iter_mut().for_each(|s| match s {
+        syn::Stmt::Semi(syn::Expr::Macro(syn::ExprMacro { mac, .. }), _) => {
+            if let Some(mac_path) = expand_ty(&mac.path) {
+                if mac_path.to_string() == "bp" {
+                    let dbg_step: syn::Stmt = parse_quote! {
+                        dbg.step(&print_map).unwrap();
+                    };
+                    *s = dbg_step;
+                }
+            }
+        }
+        _ => {}
+    });
+}
+
+fn insert_lifetime(arg: &mut syn::FnArg) {
+    match arg {
+        syn::FnArg::Captured(ac) => {
+            if let syn::Type::Reference(ty_ref) = &mut ac.ty {
+                match ty_ref.lifetime {
+                    None => {
+                        ty_ref.lifetime =
+                            Some(syn::Lifetime::new("'static", pc2::Span::call_site()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 #[proc_macro_attribute]
 pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
-    let func = parse_macro_input!(function as ItemFn);
+    assert!(args.is_empty());
+    let mut func = parse_macro_input!(function as ItemFn);
 
-    println!("{:#?}", func);
+    // println!("{:#?}", func);
+    insert_bp(&mut func.block.stmts);
 
-    let mut dbg = DebugCollect::new();
-    let mut args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
+    let mut dbg = dbg_collect::DebugCollect::new();
+    let mut p_args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
 
-    for (i, arg) in func.decl.inputs.iter().enumerate() {
-        match arg {
+    for arg in func.decl.inputs.iter_mut() {
+        match &arg {
             syn::FnArg::Captured(syn::ArgCaptured {
                 pat: syn::Pat::Ident(arg_id),
                 ty,
                 ..
             }) => {
-                args.push((arg_id.clone(), ty.clone()));
-                println!("ID {}", arg_id.ident);
+                p_args.push((arg_id.clone(), ty.clone()));
                 let name = arg_id.ident.clone().to_string();
                 let scope = func.ident.clone().to_string();
                 dbg.args.insert(name, scope);
-                println!("{:#?}", dbg);
             }
             syn::FnArg::SelfRef(self_ref) => {
                 println!("SELF REF {:#?}", self_ref);
@@ -54,60 +111,63 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
             syn::FnArg::Ignored(ty) => {
                 println!("TY {:#?}", ty);
             }
-            arg_pats => println!("ARGS {:#?}", arg_pats),
+            ar => println!("ARGS {:#?}", ar),
         }
     }
 
-    let ser = serde_json::to_string(&dbg).unwrap();
+    let arg_ty: Vec<syn::Type> = p_args.iter().map(|(_, ty)| ty).cloned().collect();
 
-    let ret_ty: Punctuated<syn::Type, Comma> = args.iter().map(|(_, ty)| ty).cloned().collect();
-    let : Punctuated<syn::Type, Comma> = args.iter().map(|(_, ty)| ty).cloned().collect();
-    let dbg_impl = quote! {
-        // #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-        // struct Variables<'a> {
-        //     #[serde(borrow)]
-        //     inner: std::collections::HashMap<&'a str, &'a str>,
-        // }
-        
-        // TODO capture args and locals from debugee
-        const args: impl Fn() = || {
-            
-        };
-        #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-        pub struct DebugCollect {
-            pub args: std::collections::HashMap<String, String>,
-        }
+    // vec of ident strings for print Fn map
+    let arg_str: Vec<String> = p_args
+        .iter()
+        .map(|(arg, _)| arg.ident.to_string())
+        .collect();
 
-        impl DebugCollect {
-            fn new() -> Self {
-                let d: DebugCollect = serde_json::from_str(#ser).unwrap();
-                // let vals: HashMap<_, _> = d.iter().map(|(k, v| {
-                //     let exp_name = syn::Ident::new(k, pc2::Span::call_site());
-                //     let capture = quote!{ |#exp_name| println!("{}", #exp_name); };
-                //     (k, capture)
-                // })).collect();
-                d
-            }
+    // unchanged arg ident
+    let arg_id: Vec<syn::PatIdent> = p_args.iter().map(|(arg, _)| arg).cloned().collect();
 
-            pub fn step(&self) -> std::io::Result<String> {
-                println!("type var name or tab to auto-complete");
-                fn print_loop(dbg: &DebugCollect) -> std::io::Result<String> {
-                    let mut input = crossterm::input();
-                    let line = input.read_line()?;
-                    if let Some(var) = dbg.args.get(line.as_str()) {
-                        return Ok(var.to_string())
-                    } else {
-                        println!("could not find variable in scope");
-                        print_loop(&dbg)
-                    }
-                }
-                print_loop(&self)
-            }
-         }
+    // changed arg ident: '_arg'
+    let capt_arg: Vec<syn::PatIdent> = p_args
+        .iter()
+        .map(|(arg, _)| {
+            let mut a = arg.clone();
+            a.ident = syn::Ident::new(&format!("_{}", arg.ident), pc2::Span::call_site());
+            a
+        })
+        .collect();
+
+    // clone for use in print Fn as ident
+    let ca_clone = capt_arg.clone();
+
+    let ret = match &func.decl.output {
+        syn::ReturnType::Default => quote!(-> ()),
+        out @ syn::ReturnType::Type(..) => quote!(#out),
     };
 
+    // serialize the obj to 'send' to the running program
+    let ser = serde_json::to_string(&dbg).unwrap();
+
+    let body = func.block;
+    func.block = Box::new(parse_quote! ({
+        let __result = (|| #ret {
+
+            let mut print_map: std::collections::HashMap<String, Cb> = std::collections::HashMap::new();
+            #(
+                // must re-bind or borrow check complains
+                // and to move into closure must clone
+                let #capt_arg = #arg_id.clone();
+
+                let print_fn = dbg_collect::Cb(Box::new(move || println!("{}", #ca_clone)));
+
+                print_map.insert(#arg_str.into(), print_fn);
+            )*
+
+            let dbg = dbg_collect::DebugCollect::deserialize(#ser);
+            #body
+        })();
+    }));
+
     TokenStream::from(quote! {
-        #dbg_impl
         #func
     })
 }
