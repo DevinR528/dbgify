@@ -4,33 +4,12 @@
 
 use std::collections::HashMap;
 
-use crossterm;
+use crossterm::{input, InputEvent, TerminalColor, TerminalInput};
 use serde::{Deserialize, Serialize};
 use serde_json;
-// #[derive(Debug, Clone)]
-// pub enum Values<'s> {
-//     Int(i64),
-//     Str(&'s str),
-//     Struct(Vec<Values<'s>>),
-// }
 
-// #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-// pub struct Variables<'a> {
-//     #[serde(borrow)]
-//     inner: std::collections::HashMap<&'a str, &'a str>,
-// }
+fn term_input(term: &TerminalInput) -> () {}
 
-// pub trait DBG {
-//     type Dbg;
-//
-//     fn print_loop(&self, dbg: &Self::Dbg) -> std::io::Result<String>;
-//
-//     fn step(&self) -> std::io::Result<String> {
-//         println!("type var name or tab to auto-complete");
-//
-//         self.print_loop(&dbg)
-//     }
-// }
 pub struct Cb(pub std::boxed::Box<(dyn std::ops::Fn())>);
 impl std::ops::Deref for Cb {
     type Target = (dyn Fn());
