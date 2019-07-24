@@ -1,6 +1,6 @@
-#Dbgify
-###Step wise debugging as a rust attribute macro. (Major WIP)
-###Tab complete your bugs away!
+# Dbgify
+### Step wise debugging as a rust attribute macro. (Major WIP)
+### Tab complete your bugs away!
 
 [![Build Status](https://travis-ci.com/DevinR528/dbgify?branch=master)](https://travis-ci.com/DevinR528/dbgify)
 [![Latest Version](https://img.shields.io/crates/v/dbgify.svg)](https://crates.io/crates/toml)
