@@ -32,5 +32,11 @@ fn main() {
 }
 
 ```
-this will pause at bp!() and you can tab complete
+this will pause at bp!() and you can inspect the program while running. Tab completion, colored output,
+and scope awareness.
+
+##Problems to Solve
+threads
+impl methods
+and much more...
 

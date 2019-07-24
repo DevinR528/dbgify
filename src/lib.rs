@@ -1,6 +1,8 @@
 // TODO remove
 #![allow(dead_code)]
 #![allow(unused_imports)]
+// dont remove until stable
+#![feature(specialization)]
 
 pub use console;
 pub use serde::{Deserialize, Serialize};

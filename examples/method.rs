@@ -1,16 +1,15 @@
 use dbgify::*;
 
-struct Test;
+struct Test(usize);
 
 impl Test {
     #[dbgify]
-    fn test(&self, x: &mut usize) -> usize {
+    fn add_one(&mut self, x: usize) {
         bp!();
-        x += 1;
-        x
+        self.0 += x;
     }
 }
 fn main() {
-    let x = Test::test(1usize);
-    println!("{}", x)
+    let mut t = Test(1);
+    t.add_one(1usize);
 }

@@ -1,12 +1,13 @@
+#![feature(specialization)]
 use dbgify::*;
 
 fn main() {
     #[dbgify]
-    fn test<'a>(x: &'a mut String) {
-        let _y = 0;
+    fn test(x: &mut Vec<String>) {
+        let _y = 10;
         bp!();
-        x.push_str(" world");
+        x.push(" world".into());
     }
-    let mut x = "hello".to_string();
+    let mut x = vec!["hello".to_string()];
     test(&mut x);
 }

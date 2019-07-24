@@ -1,7 +1,8 @@
 // TODO remove
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![recursion_limit = "128"]
+#![recursion_limit = "512"]
+
 extern crate proc_macro;
 
 use std::collections::HashMap;
@@ -12,13 +13,16 @@ use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use syn::{parse_macro_input, parse_quote, punctuated::Punctuated, token::Comma, ItemFn, Token};
+use syn::{
+    parse_macro_input, parse_quote, punctuated::Punctuated, token::Comma, ItemFn, Token, Type,
+};
 
 use dbg_collect;
 
-fn expand_ty(path: &syn::Path) -> Option<syn::Ident> {
+fn expand_macro(path: &syn::Path) -> Option<syn::Ident> {
     let syn::Path { segments, .. } = path;
-    if let Some(ps) = segments.first() {
+    // make sure it is always last, cause trouble?
+    if let Some(ps) = segments.last() {
         Some(ps.value().ident.clone())
     } else {
         None
@@ -45,7 +49,7 @@ fn capture_local(stmts: &Vec<syn::Stmt>) {
 fn insert_bp(stmts: &mut Vec<syn::Stmt>) {
     stmts.iter_mut().for_each(|s| match s {
         syn::Stmt::Semi(syn::Expr::Macro(syn::ExprMacro { mac, .. }), _) => {
-            if let Some(mac_path) = expand_ty(&mac.path) {
+            if let Some(mac_path) = expand_macro(&mac.path) {
                 if mac_path.to_string() == "bp" {
                     let dbg_step: syn::Stmt = parse_quote! {
                         dbg.step(&print_map).unwrap();
@@ -75,6 +79,77 @@ fn insert_lifetime(arg: &mut syn::FnArg) {
     }
 }
 
+fn expand_path(path: &syn::Path) -> Option<syn::Ident> {
+    if let Some(ps) = path.segments.last() {
+        Some(ps.value().ident.clone())
+    } else {
+        None
+    }
+}
+
+fn expand_bounds(bounds: &Punctuated<syn::TypeParamBound, syn::token::Add>) -> Option<syn::Ident> {
+    if let Some(b) = bounds.last() {
+        if let syn::TypeParamBound::Trait(tb) = b.value() {
+            expand_path(&tb.path)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn expand_arg_ty(ty: &syn::Type) -> Option<String> {
+    match ty {
+        Type::Slice(_ty) => Some("Vec".to_string()),
+        Type::Array(_ty) => Some("Vec".into()),
+        Type::Ptr(_ty) => Some("Ptr".into()),
+        Type::Reference(ty) => expand_arg_ty(&ty.elem),
+        Type::BareFn(_ty) => Some("Fn".into()),
+        Type::Never(_ty) => Some("Never".into()),
+        Type::Tuple(_ty) => Some("Tuple".into()),
+        Type::Path(ty) => {
+            if let Some(id) = expand_path(&ty.path) {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        }
+        Type::TraitObject(ty) => {
+            if let Some(trait_obj) = expand_bounds(&ty.bounds) {
+                // TODO make know its a trait
+                Some(trait_obj.to_string())
+            } else {
+                eprintln!("found no trait");
+                None
+            }
+        }
+        Type::ImplTrait(ty) => {
+            if let Some(trait_impl) = expand_bounds(&ty.bounds) {
+                // TODO make know its a trait
+                Some(trait_impl.to_string())
+            } else {
+                eprintln!("found no impl'ed trait");
+                None
+            }
+        }
+        Type::Paren(ty) => expand_arg_ty(&ty.elem),
+        Type::Group(ty) => expand_arg_ty(&ty.elem),
+        Type::Infer(_ty) => Some("Underscore".into()),
+        Type::Macro(ty) => {
+            if let Some(id) = expand_macro(&ty.mac.path) {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        }
+        Type::Verbatim(ty) => {
+            eprintln!("VERBATIM {:#?}", ty);
+            panic!()
+        }
+    }
+}
+
 #[proc_macro_attribute]
 pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     assert!(args.is_empty());
@@ -86,17 +161,23 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     let mut dbg = dbg_collect::DebugCollect::default();
     let mut p_args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
 
-    for arg in func.decl.inputs.iter_mut() {
+    for arg in func.decl.inputs.iter() {
         match &arg {
             syn::FnArg::Captured(syn::ArgCaptured {
                 pat: syn::Pat::Ident(arg_id),
                 ty,
                 ..
             }) => {
+                // println!("{:#?}", ty);
                 p_args.push((arg_id.clone(), ty.clone()));
                 let name = arg_id.ident.clone().to_string();
                 let scope = func.ident.clone().to_string();
-                dbg.args.insert(name, scope);
+                // TODO remove expect for something better
+                let am = dbg_collect::ArgMeta::new(
+                    expand_arg_ty(&ty).expect("expand type failed"),
+                    scope,
+                );
+                dbg.args.insert(name, am);
             }
             syn::FnArg::SelfRef(self_ref) => {
                 println!("SELF REF {:#?}", self_ref);
@@ -114,17 +195,15 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
         }
     }
 
+    // vec of types for casting/transmute
     let arg_ty: Vec<syn::Type> = p_args.iter().map(|(_, ty)| ty).cloned().collect();
-
     // vec of ident strings for print Fn map
     let arg_str: Vec<String> = p_args
         .iter()
         .map(|(arg, _)| arg.ident.to_string())
         .collect();
-
     // unchanged arg ident
     let arg_id: Vec<syn::PatIdent> = p_args.iter().map(|(arg, _)| arg).cloned().collect();
-
     // changed arg ident: '_arg'
     let capt_arg: Vec<syn::PatIdent> = p_args
         .iter()
@@ -136,7 +215,8 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
         .collect();
 
     // clone for use in print Fn as ident
-    let ca_clone = capt_arg.clone();
+    // TODO this is terible why do i have to do this
+    let capt_clone = capt_arg.clone();
 
     let ret = match &func.decl.output {
         syn::ReturnType::Default => quote!(-> ()),
@@ -150,17 +230,21 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     func.block = Box::new(parse_quote! ({
         let __result = (|| #ret {
 
+            // fn cast_dbg<T, D: Debug + 'static>(t: &T) -> &D {
+            //     unsafe { std::mem::transmute(t) }
+            // }
             let mut print_map: std::collections::HashMap<String, PrintFn> = std::collections::HashMap::new();
             #(
-                // must re-bind or borrow check complains
+               // must re-bind or borrow check complains
                 // and to move into closure must clone
                 let #capt_arg = #arg_id.clone();
 
-                let print_fn = dbg_collect::PrintFn(Box::new(move || println!("{}", #ca_clone)));
-
+                let print_fn = dbg_collect::PrintFn(Box::new(move || {
+                    // TODO clean up type signature
+                    dbg_collect::show_fmt::<_, #arg_ty, String>(&#capt_clone)
+                }));
                 print_map.insert(#arg_str.into(), print_fn);
             )*
-
             let dbg = dbg_collect::DebugCollect::deserialize(#ser);
             #body
         })();
