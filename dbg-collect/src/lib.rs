@@ -2,9 +2,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 // dont remove until stable
-#![feature(specialization)]
+#![feature(specialization, raw)]
 
 use std::collections::HashMap;
+use std::fmt::{Debug, Display};
 
 use console::{Key, Term};
 use serde::{Deserialize, Serialize};
@@ -47,67 +48,68 @@ pub enum Output {
     Debug,
 }
 
-trait DisplayCheck {
-    fn is_display(&self) -> Output;
+trait Debugable {
+    fn as_debug(self: &'_ Self) -> &'_ dyn Debug;
 }
-trait DebugCheck {
-    fn is_debug(&self) -> Output;
-}
-impl<T> DisplayCheck for T {
-    default fn is_display(&self) -> Output {
-        Output::Not
-    }
-}
-impl<T> DebugCheck for T {
-    default fn is_debug(&self) -> Output {
-        Output::Not
-    }
-}
-impl<T: std::fmt::Display> DisplayCheck for T {
-    fn is_display(&self) -> Output {
-        Output::Display
-    }
-}
-impl<T: std::fmt::Debug> DebugCheck for T {
-    fn is_debug(&self) -> Output {
-        Output::Debug
-    }
-}
+impl<T> Debugable for T {
+    default fn as_debug(self: &'_ Self) -> &'_ dyn Debug {
+        struct DefaultDebug;
 
-pub struct Displayable<T>(std::marker::PhantomData<T>);
-impl<T> Displayable<T> {
-    fn cast<D: std::fmt::Display + 'static>(t: &T) -> &D {
-        unsafe { std::mem::transmute(t) }
-    }
-    pub fn print<C: std::fmt::Display + 'static>(d: T) {
-        println!("{}", Self::cast::<C>(&d))
-    }
-}
-
-pub struct Debugable<T>(std::marker::PhantomData<T>);
-impl<T> Debugable<T> {
-    fn cast<D: std::fmt::Debug + 'static>(t: &T) -> &D {
-        unsafe { std::mem::transmute(t) }
-    }
-    pub fn print<C: std::fmt::Debug + 'static>(d: T) {
-        println!("{:?}", Self::cast::<C>(&d))
-    }
-}
-
-pub fn show_fmt<T, D: std::fmt::Debug + 'static, P: std::fmt::Display + 'static>(t: &T) {
-    match (DisplayCheck::is_display(t), DebugCheck::is_debug(t)) {
-        (Output::Display, Output::Debug) => Debugable::print::<D>(t),
-        (Output::Display, Output::Not) => Displayable::print::<P>(t),
-        (Output::Not, Output::Debug) => Debugable::print::<D>(t),
-        (Output::Not, Output::Not) => {
-            println!("'{}' does not impl Debug or Display", stringify!(t))
+        impl Debug for DefaultDebug {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "<Missing Debug Impl>")
+            }
         }
-        err => {
-            println!("{:?}", err);
-            panic!("show fmt failed BUG")
-        }
+        &DefaultDebug
     }
 }
+impl<T: Debug> Debugable for T {
+    fn as_debug(self: &'_ Self) -> &'_ dyn Debug {
+        self
+    }
+}
+
+use std::cell::{Cell, UnsafeCell};
+use std::ptr::NonNull;
+
+pub struct VarRef(Cell<Option<NonNull<UnsafeCell<dyn Debugable>>>>);
+impl VarRef {
+    fn new() -> Self {
+        Self(Cell::new(None))
+    }
+    fn set_ref<T: Debugable>(self: &'_ Self, ptr: &'_ UnsafeCell<T>) {
+        self.0.set(Some(unsafe {
+            // create a null ptr as a &Debugable trait object
+            let mut raw_trait_obj: std::raw::TraitObject =
+                std::mem::transmute(std::ptr::null::<T>() as *const dyn Debugable);
+            // fill trait object with ptr to local or arg value
+            raw_trait_obj.data = ptr as *const _ as *mut ();
+            // wrapper to indicate unsafe interior, mutable aliasable value
+            // (a ptr to a &mut arg or local)
+            let ptr: &UnsafeCell<dyn Debugable> = std::mem::transmute(raw_trait_obj);
+
+            ptr.into()
+        }));
+    }
+    fn drop_ref(self: &'_ Self) {
+        self.0.set(None)
+    }
+}
+
+// pub fn show_fmt<T, D: Debug, P: Display>(t: &T) {
+//     match (DisplayCheck::is_display(t), DebugCheck::is_debug(t)) {
+//         (Output::Display, Output::Debug) => Debugable::print::<D>(t),
+//         (Output::Display, Output::Not) => Displayable::print::<P>(t),
+//         (Output::Not, Output::Debug) => Debugable::print::<D>(t),
+//         (Output::Not, Output::Not) => {
+//             println!("'{}' does not impl Debug or Display", stringify!(t))
+//         }
+//         err => {
+//             println!("{:?}", err);
+//             panic!("show fmt failed BUG")
+//         }
+//     }
+// }
 
 fn term_input(term: &Term) -> () {}
 
@@ -135,11 +137,35 @@ impl DebugCollect {
 
             let line = input.read_line()?;
             // if var is saved then print value
-            if let Some(_) = self.args.get(&line) {
+            if let Some(arg_meta) = self.args.get(&line) {
                 // then check if in scope?
-                let mut stdout = StandardStream::stdout(ColorChoice::Auto);
-                stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-
+                let mut stdout = match arg_meta.type_ref() {
+                    "String" => {
+                        let mut std_out = StandardStream::stdout(ColorChoice::Auto);
+                        std_out.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+                        std_out
+                    }
+                    "Vec" => {
+                        let mut std_out = StandardStream::stdout(ColorChoice::Auto);
+                        std_out.set_color(ColorSpec::new().set_fg(Some(Color::White)))?;
+                        std_out
+                    }
+                    "Tuple" => {
+                        let mut std_out = StandardStream::stdout(ColorChoice::Auto);
+                        std_out.set_color(ColorSpec::new().set_fg(Some(Color::Blue)))?;
+                        std_out
+                    }
+                    "str" => {
+                        let mut std_out = StandardStream::stdout(ColorChoice::Auto);
+                        std_out.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+                        std_out
+                    }
+                    _ => {
+                        let mut std_out = StandardStream::stdout(ColorChoice::Auto);
+                        std_out.set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))?;
+                        std_out
+                    }
+                };
                 if let Some(cb) = cbs.get(&line) {
                     cb();
                 } else {
@@ -166,8 +192,22 @@ impl DebugCollect {
 
 #[cfg(test)]
 mod tests {
+
+    use super::*;
+
     #[test]
-    fn it_works() {
+    fn unsafe_cast_fn() {
+        fn assert_dbg<T: Debug>(_: &T) {}
+        fn make_gen<T, D: Debug + 'static>(t: &T) {
+            let x = unsafe { Debugable::cast::<D>(&t) };
+            assert_dbg(&x);
+        }
+        let num = 12.65f32;
+        make_gen::<_, f32>(&num);
+    }
+
+    #[test]
+    fn unsafe_show_fmt() {
         assert_eq!(2 + 2, 4);
     }
 }

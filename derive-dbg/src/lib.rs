@@ -62,21 +62,8 @@ fn insert_bp(stmts: &mut Vec<syn::Stmt>) {
     });
 }
 
-fn insert_lifetime(arg: &mut syn::FnArg) {
-    match arg {
-        syn::FnArg::Captured(ac) => {
-            if let syn::Type::Reference(ty_ref) = &mut ac.ty {
-                match ty_ref.lifetime {
-                    None => {
-                        ty_ref.lifetime =
-                            Some(syn::Lifetime::new("'static", pc2::Span::call_site()));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
+fn insert_lifetime {
+    
 }
 
 fn expand_path(path: &syn::Path) -> Option<syn::Ident> {
@@ -150,6 +137,25 @@ fn expand_arg_ty(ty: &syn::Type) -> Option<String> {
     }
 }
 
+fn capture_mut_args(arg: syn::FnArg) -> bool {
+    match arg {
+        syn::FnArg::Captured(ac) => {
+            if let syn::Type::Reference(ty_ref) = &mut ac.ty {
+                if let Some(ty_mut) = ty_ref.mutability {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn capture_mut_locals() {}
+
 #[proc_macro_attribute]
 pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     assert!(args.is_empty());
@@ -196,7 +202,22 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     }
 
     // vec of types for casting/transmute
-    let arg_ty: Vec<syn::Type> = p_args.iter().map(|(_, ty)| ty).cloned().collect();
+    let arg_ty: Vec<syn::Type> = p_args.iter().map(|(_, ty)| ty).cloned().collect();;
+    // strip any & or &mut from type so we don't double ref when we unsafe cast
+    // with show_fmt
+    let base_ty: Vec<syn::Type> = p_args
+        .iter()
+        .map(|(_, ty)| match ty {
+            syn::Type::Reference(ty_ref) => {
+                let t = ty_ref.elem.clone();
+                *t
+            }
+            t => t.clone(),
+        })
+        .collect();
+
+    println!("{:#?}", base_ty);
+
     // vec of ident strings for print Fn map
     let arg_str: Vec<String> = p_args
         .iter()
@@ -204,6 +225,7 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
         .collect();
     // unchanged arg ident
     let arg_id: Vec<syn::PatIdent> = p_args.iter().map(|(arg, _)| arg).cloned().collect();
+    let mut_args: Vec<syn::PatIdent> = p_args.iter().filter(|(arg, _)| capture_mut_args(arg)).cloned().collect();
     // changed arg ident: '_arg'
     let capt_arg: Vec<syn::PatIdent> = p_args
         .iter()
@@ -230,18 +252,12 @@ pub fn dbgify(args: TokenStream, function: TokenStream) -> TokenStream {
     func.block = Box::new(parse_quote! ({
         let __result = (|| #ret {
 
-            // fn cast_dbg<T, D: Debug + 'static>(t: &T) -> &D {
-            //     unsafe { std::mem::transmute(t) }
-            // }
             let mut print_map: std::collections::HashMap<String, PrintFn> = std::collections::HashMap::new();
             #(
-               // must re-bind or borrow check complains
-                // and to move into closure must clone
-                let #capt_arg = #arg_id.clone();
-
+                 
                 let print_fn = dbg_collect::PrintFn(Box::new(move || {
                     // TODO clean up type signature
-                    dbg_collect::show_fmt::<_, #arg_ty, String>(&#capt_clone)
+                    dbg_collect::show_fmt::<_, #base_ty, usize>(&#capt_clone)
                 }));
                 print_map.insert(#arg_str.into(), print_fn);
             )*

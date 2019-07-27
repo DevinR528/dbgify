@@ -3,11 +3,11 @@ use dbgify::*;
 
 fn main() {
     #[dbgify]
-    fn test(x: &mut Vec<String>) {
-        let _y = 10;
+    fn test(x: &mut String, y: usize) {
         bp!();
-        x.push(" world".into());
+        x.push_str(" world");
+        bp!();
     }
-    let mut x = vec!["hello".to_string()];
-    test(&mut x);
+    let mut x = "hello".to_string();
+    test(&mut x, 10);
 }

@@ -6,11 +6,11 @@
 [![Latest Version](https://img.shields.io/crates/v/dbgify.svg)](https://crates.io/crates/toml)
 
 An attribute macro that allows you to step through and inspect rust code. This macro captures variables
-and inserts 'breakpoints' to search and print running rust programs.
+and inserts 'breakpoints' to search through and print variable in a running rust programs. So far it must be used
+on a function or method, but fn main() does work.
 
 ## Use
 Include in Cargo.toml
-[toml]: https://github.com/toml-lang/toml
 ```toml
 ["dependencies"]
 dbgify="0.1"
@@ -22,7 +22,7 @@ use dbgify::*;
 
 fn main() {
     #[dbgify]
-    fn test<'a>(x: &'a mut String) {
+    fn test(x: &mut String) {
         let _y = 0;
         bp!();
         x.push_str(" world");
@@ -37,6 +37,8 @@ and scope awareness.
 
 ##Problems to Solve
 threads
-impl methods
+impl methods - should this be possible
+scopes - with RAII and the borrow checker this might get ugly.
+support step-in like functionality (possibly by creating another attr macro)
 and much more...
 
