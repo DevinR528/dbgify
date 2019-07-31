@@ -19,6 +19,93 @@ use syn::{
 
 use dbg_collect;
 
+struct Args {
+    org_args: Vec<syn::FnArg>,
+    mut_args: Vec<syn::FnArg>,
+    args: Vec<syn::FnArg>,
+}
+
+impl Args {
+    fn new(args: Vec<syn::FnArg>) -> Self {
+        let mut ret = Args {
+            mut_args: Vec::new(),
+            args: Vec::new(),
+        };
+        args.iter()
+            .map(|arg| expand_fn_arg(arg))
+            .for_each(|pair| ret.push(pair));
+        ret
+    }
+
+    fn push(&mut self, arg: syn::FnArg) {
+        if is_mut(arg) {
+            self.mut_args.push(arg);
+        } else {
+            self.args.push(arg);
+        }
+    }
+
+    fn capture_args(
+        &mut self,
+        &mut dbg: dbg_collect::DebugCollect,
+    ) -> (
+        Vec<syn::PatIdent>,
+        Vec<syn::PatIdent>,
+        Vec<syn::PatIdent>,
+        Vec<String>,
+    ) {
+        let mut p_args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
+        for arg in self.org_args.iter() {
+            match &arg {
+                syn::FnArg::Captured(syn::ArgCaptured {
+                    pat: syn::Pat::Ident(arg_id),
+                    ty,
+                    ..
+                }) => {
+                    // println!("{:#?}", ty);
+                    p_args.push((arg_id.clone(), ty.clone()));
+                    let name = arg_id.ident.clone().to_string();
+                    let scope = self._fn.ident.clone().to_string();
+                    // TODO remove expect for something better
+                    let am = dbg_collect::ArgMeta::new(
+                        self.expand_arg_ty(&ty).expect("expand type failed"),
+                        scope,
+                    );
+                    dbg.args.insert(name, am);
+                }
+                ar => println!("ARGS {:#?}", ar),
+            }
+        }
+        // vec of ident strings for print Fn map
+        let arg_str: Vec<String> = p_args
+            .iter()
+            .map(|(arg, _)| arg.ident.to_string())
+            .collect();
+        // unchanged arg ident
+        let arg_id: Vec<syn::PatIdent> = p_args.iter().map(|(arg, _)| arg).cloned().collect();
+
+        // changed arg ident: '_arg'
+        let capt_arg: Vec<syn::PatIdent> = p_args
+            .iter()
+            .map(|(arg, _)| {
+                let mut a = arg.clone();
+                a.ident = syn::Ident::new(&format!("_{}", arg.ident), pc2::Span::call_site());
+                a
+            })
+            .collect();
+        // clone for use in print Fn as ident
+        // TODO this is terible why do i have to do this
+        (capt_arg.clone(), arg_id, capt_arg.clone(), arg_str)
+    }
+}
+
+struct VisitStmt {
+    stmts: Vec<syn::Stmt>,
+    mut_idx: Vec<usize>,
+}
+
+impl VisitStmt {}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Func {
     dbg_col: dbg_collect::DebugCollect,
@@ -258,29 +345,6 @@ impl Func {
         }
     }
 
-    fn check_mut_args(&self, f: Box<dyn FnMut(&syn::FnArg)>) {
-        // mut args
-        self._fn
-            .decl
-            .inputs
-            .iter()
-            .filter(|arg| self.capture_mut_args(arg))
-            .for_each(|arg| (*f)(arg));
-    }
-
-    fn visit_stmts_mut(&mut self) {
-        let visit = |arg: &syn::FnArg| {
-            let (id, _) = expand_fn_arg(arg);
-            self.stmts.iter_mut().for_each(|s| {
-                // TODO
-                if is_mut_var(s, &id) {
-                    insert_stmt(s);
-                }
-            })
-        };
-        let mut_args = self.check_mut_args(Box::new(visit));
-    }
-
     fn capture_local(&self) {
         println!("{:#?}", self.stmts);
     }
@@ -301,13 +365,98 @@ impl Func {
             })
             .collect();
     }
+
+    fn expand_expr(&mut self, e: &syn::Expr) -> Option<syn::Ident> {
+        match e {
+            syn::Expr::Path(e_path) => expand_path(&e_path.path),
+            syn::Expr::MethodCall(e_meth) => self.expand_expr(&e_meth.receiver),
+            syn::Expr::Call(e_call) => {
+                let muts = e_call
+                    .args
+                    .iter()
+                    .filter(|arg| self.is_mut_var(arg, mut_vars))
+                    .for_each(|m_arg| self.insert_stmt());
+                None
+            }
+            syn::Expr::Reference(expr_ref) => {}
+            expr => {
+                println!("IN expand_expr {:?}", expr);
+                panic!()
+            }
+        }
+    }
+
+    fn expand_stmt(&mut self, s: &syn::Stmt) -> Option<syn::Ident> {
+        match s {
+            syn::Stmt::Semi(expr, s) => self.expand_expr(&expr),
+            syn::Stmt::Local(loc) => panic!("impl LOCALS"),
+            syn::Stmt::Expr(expr) => self.expand_expr(&expr),
+            syn::Stmt::Item(item) => panic!("impl LOCALS"),
+        }
+    }
+
+    fn is_mut_var(&mut self, stmt: &syn::Stmt, args: Vec<&syn::FnArg>) -> bool {
+        args.iter().any(|arg| {
+            let (id, ty) = expand_fn_arg(arg);
+            // expand_stmt in ExprCall case must insert
+            if let Some(vars_used) = self.expand_stmt(stmt) {
+                if id == vars_used {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
+    }
+
+    fn replace_stmt(&mut self, idx: usize) {
+        let mut s = self.stmts[idx];
+        s = parse_quote!(x = 5;);
+    }
+
+    fn insert_stmt(&mut self) {}
+
+    fn check_mut_args(&self, f: Box<(dyn FnMut(Vec<&syn::FnArg>) + '_)>) {
+        // mut args
+        let mut_args = self
+            ._fn
+            .decl
+            .inputs
+            .iter()
+            .filter(|arg| self.capture_mut_args(arg))
+            .collect();
+
+        (*f)(mut_args)
+    }
+
+    fn visit_stmts_mut(&mut self) {
+        // just callback
+        let visit = Box::new(|args: Vec<&syn::FnArg>| {
+            self.stmts.iter_mut().enumerate().for_each(|(i, s)| {
+                // TODO
+                if self.is_mut_var(s, args) {
+                    self.replace_stmt(s);
+                }
+            })
+        }) as Box<(dyn FnMut(Vec<&syn::FnArg>) + '_)>;
+
+        // drives
+        let mut_args = self.check_mut_args(visit);
+    }
 }
 
-fn is_mut_var(stmt: &syn::Stmt, id: &syn::Ident) -> bool {
-    true
-}
-
-fn insert_stmt(stmt: &mut syn::Stmt) {}
+// fn visit_stmts_mut(&mut self) {
+//     let visit = Box::new(|args: Vec<&syn::FnArg>| {
+//         self.stmts.iter_mut().for_each(|s| {
+//             if is_mut_var(s, args) {
+//                 replace_stmt(s);
+//             }
+//         })
+//     }) as Box<(dyn FnMut(Vec<&syn::FnArg>) + '_)>;
+//     let mut_args = self.check_mut_args(visit);
+// }
 
 fn expand_fn_arg(arg: &syn::FnArg) -> (syn::PatIdent, syn::Type) {
     match arg {
@@ -330,5 +479,76 @@ fn expand_macro(path: &syn::Path) -> Option<syn::Ident> {
         Some(ps.value().ident.clone())
     } else {
         None
+    }
+}
+
+fn expand_path(path: &syn::Path) -> Option<syn::Ident> {
+    if let Some(ps) = path.segments.last() {
+        Some(ps.value().ident.clone())
+    } else {
+        None
+    }
+}
+
+fn expand_bounds(bounds: &Punctuated<syn::TypeParamBound, syn::token::Add>) -> Option<syn::Ident> {
+    if let Some(b) = bounds.last() {
+        if let syn::TypeParamBound::Trait(tb) = b.value() {
+            expand_path(&tb.path)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn expand_arg_ty(ty: &syn::Type) -> Option<String> {
+    match ty {
+        Type::Slice(_ty) => Some("Vec".to_string()),
+        Type::Array(_ty) => Some("Vec".into()),
+        Type::Ptr(_ty) => Some("Ptr".into()),
+        Type::Reference(ty) => expand_arg_ty(&ty.elem),
+        Type::BareFn(_ty) => Some("Fn".into()),
+        Type::Never(_ty) => Some("Never".into()),
+        Type::Tuple(_ty) => Some("Tuple".into()),
+        Type::Path(ty) => {
+            if let Some(id) = expand_path(&ty.path) {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        }
+        Type::TraitObject(ty) => {
+            if let Some(trait_obj) = expand_bounds(&ty.bounds) {
+                // TODO make know its a trait
+                Some(trait_obj.to_string())
+            } else {
+                eprintln!("found no trait");
+                None
+            }
+        }
+        Type::ImplTrait(ty) => {
+            if let Some(trait_impl) = expand_bounds(&ty.bounds) {
+                // TODO make know its a trait
+                Some(trait_impl.to_string())
+            } else {
+                eprintln!("found no impl'ed trait");
+                None
+            }
+        }
+        Type::Paren(ty) => expand_arg_ty(&ty.elem),
+        Type::Group(ty) => expand_arg_ty(&ty.elem),
+        Type::Infer(_ty) => Some("Underscore".into()),
+        Type::Macro(ty) => {
+            if let Some(id) = expand_macro(&ty.mac.path) {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        }
+        Type::Verbatim(ty) => {
+            eprintln!("VERBATIM {:#?}", ty);
+            panic!()
+        }
     }
 }
