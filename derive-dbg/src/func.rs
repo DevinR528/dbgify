@@ -273,7 +273,7 @@ impl Func {
             let (id, _) = expand_fn_arg(arg);
             self.stmts.iter_mut().for_each(|s| {
                 // TODO
-                if is_mut_var(s, id) {
+                if is_mut_var(s, &id) {
                     insert_stmt(s);
                 }
             })

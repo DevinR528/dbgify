@@ -8,7 +8,6 @@ fn main() {
         std::mem::drop(z);
         bp!();
         x.push_str(" world");
-        bp!();
     }
     let mut x = "hello".to_string();
     test(&mut x, 10);
