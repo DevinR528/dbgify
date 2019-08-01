@@ -179,7 +179,7 @@ impl Args {
 #[derive(Debug, Clone)]
 struct VisitStmt {
     mut_args: Vec<syn::FnArg>,
-    stmts: Vec<RefCell<syn::Stmt>>,
+    stmts: Vec<syn::Stmt>,
     curr_stmt: Option<syn::Stmt>,
     mut_idx: Vec<usize>,
 }
@@ -189,7 +189,7 @@ impl VisitStmt {
     fn new(stmts: Vec<syn::Stmt>) -> Self {
         VisitStmt {
             mut_args: Vec::default(),
-            stmts: stmts.into_iter().map(|s| RefCell::new(s)).collect(),
+            stmts,
             curr_stmt: None,
             mut_idx: Vec::default(),
         }
@@ -212,22 +212,19 @@ impl VisitStmt {
     /// ```
     /// allows you to inspect every change in the value of x or any other argument,
     /// local, or captured variable.
-    pub fn insert_bp(&self) {
-        self.stmts.iter().for_each(|s| {
-            let mut stmt_ref_mut = s.borrow_mut();
-            match &*stmt_ref_mut {
-                syn::Stmt::Semi(syn::Expr::Macro(syn::ExprMacro { mac, .. }), _) => {
-                    if let Some(mac_path) = expand_macro(&mac.path) {
-                        if mac_path.to_string() == "bp" {
-                            let dbg_step: syn::Stmt = parse_quote! {
-                                dbg.step(&print_map).unwrap();
-                            };
-                            *stmt_ref_mut = dbg_step;
-                        }
+    pub fn insert_bp(&mut self) {
+        self.stmts.iter_mut().for_each(|s| match s {
+            syn::Stmt::Semi(syn::Expr::Macro(syn::ExprMacro { mac, .. }), _) => {
+                if let Some(mac_path) = expand_macro(&mac.path) {
+                    if mac_path.to_string() == "bp" {
+                        let dbg_step: syn::Stmt = parse_quote! {
+                            dbg.step(&print_map).unwrap();
+                        };
+                        *s = dbg_step;
                     }
                 }
-                _ => {}
             }
+            _ => {}
         });
     }
 
@@ -272,7 +269,7 @@ impl VisitStmt {
     //     (id, rest)
     // }
 
-    fn replace_stmt(&self, s: &mut syn::Stmt) {
+    fn replace_stmt(&mut self, s: &mut syn::Stmt) {
         let x = s.clone();
         //let (id, action) = self.split_for_use(&s);
         let new_stmt: syn::Stmt = parse_quote! {
@@ -283,17 +280,16 @@ impl VisitStmt {
 
     fn compare_mut_stmt(&self, f: Box<(dyn FnMut(Vec<&syn::FnArg>) + '_)>) {}
 
-    fn visit_stmts_mut(&self) {
-        self.stmts.iter().for_each(|s| {
-            if self.is_mut_var(&s.borrow()) {
-                let s_mut: &mut syn::Stmt = &mut s.borrow_mut();
-                self.replace_stmt(s_mut)
+    fn visit_stmts_mut(&mut self) {
+        self.stmts.iter_mut().for_each(|s| {
+            if self.is_mut_var(&s) {
+                self.replace_stmt(s)
             }
         });
     }
 
-    fn iter(&self) -> impl Iterator<Item = &RefCell<syn::Stmt>> {
-        self.stmts.iter()
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut syn::Stmt> {
+        self.stmts.iter_mut()
     }
 }
 
@@ -340,7 +336,7 @@ impl Func {
         self.args.capture_args(&mut self.dbg_col)
     }
 
-    pub fn insert_bp(&self) {
+    pub fn insert_bp(&mut self) {
         self.stmts.insert_bp()
     }
 
