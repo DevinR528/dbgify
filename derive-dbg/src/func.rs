@@ -292,6 +292,15 @@ impl VisitStmt {
         });
     }
 
+    fn body(&self) -> syn::Block {
+        let s: Vec<syn::Stmt> = self.stmts.iter().map(|s| {
+            let stmt = s.borrow().clone();
+            stmt
+        }).collect();
+
+        parse_quote!{ { #(#s)* } }
+    }
+
     fn iter(&self) -> impl Iterator<Item = &RefCell<syn::Stmt>> {
         self.stmts.iter()
     }
@@ -355,7 +364,7 @@ impl Func {
 
         let (capt_arg, arg_id, capt_clone, arg_str) = self.capture_args();
 
-        let body = self._fn.block.clone();
+        let body = self.stmts.body();
         self._fn.block = Box::new(parse_quote! ({
             std::thread_local! {
                 static VARS: dbg_collect::VarRef = dbg_collect::VarRef::new();
