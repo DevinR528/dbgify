@@ -44,3 +44,20 @@ let dbg_impl = quote! {
             }
         }
     };
+
+struct IterStmtMut<'a> {
+    all: &'a Vec<syn::Stmt>,
+    ele: Option<&'a mut syn::Stmt>,
+    pos: usize,
+}
+
+impl<'a> std::iter::Iterator for IterStmtMut<'a> {
+    type Item = &'a mut syn::Stmt;
+
+    fn next() -> Option<Self::Item> {
+        let next = all.get(self.pos).as_mut().map(|e| {
+            self.ele = e.
+        });
+
+    }
+}
