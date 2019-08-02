@@ -32,21 +32,13 @@ impl ArgMeta {
     }
 }
 
-pub struct PrintFn(pub std::boxed::Box<(dyn std::ops::Fn())>);
-impl std::ops::Deref for PrintFn {
-    type Target = (dyn Fn());
+pub struct PrintFn<'a>(pub std::boxed::Box<(dyn std::ops::Fn() + 'a)>);
+impl<'a> std::ops::Deref for PrintFn<'a> {
+    type Target = (dyn Fn() + 'a);
 
     fn deref(&self) -> &Self::Target {
         &(*self.0)
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum Output {
-    Either,
-    Not,
-    Display,
-    Debug,
 }
 
 pub trait Debugable {
@@ -86,7 +78,7 @@ impl DebugCollect {
         let d: DebugCollect = serde_json::from_str(s).unwrap();
         d
     }
-    pub fn step(&self, cbs: &HashMap<String, PrintFn>) -> std::io::Result<()> {
+    pub fn step(&self, cbs: &HashMap<String, PrintFn<'_>>) -> std::io::Result<()> {
         println!("type var name or tab to auto-complete");
         let print_loop = || -> std::io::Result<bool> {
             // put this in struct
@@ -145,10 +137,6 @@ impl DebugCollect {
         }
         unreachable!("in fn step()")
     }
-}
-
-pub fn show_fmt(d: &dyn Debugable) {
-    println!("{:?}", d.as_debug())
 }
 
 fn term_input(term: &Term) -> () {}

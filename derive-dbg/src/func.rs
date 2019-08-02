@@ -22,11 +22,85 @@ use syn::{
 
 use dbg_collect;
 
+struct ArgIdents {
+    non_mut_args: Vec<syn::PatIdent>,
+    mut_args: Vec<syn::PatIdent>,
+    mut_under: Vec<syn::PatIdent>,
+    non_mut_under: Vec<syn::PatIdent>,
+    mut_string: Vec<String>,
+    non_mut_string: Vec<String>,
+}
+
+impl ArgIdents {
+    fn new(non_mut_args: Vec<syn::PatIdent>, mut_args: Vec<syn::PatIdent>) -> Self {
+        let non_mut_under: Vec<syn::PatIdent> = non_mut_args
+            .iter()
+            .map(|arg| {
+                let mut a = arg.clone();
+                a.ident = syn::Ident::new(&format!("_{}", arg.ident), pc2::Span::call_site());
+                a
+            })
+            .collect();
+        // vec of ident strings for print Fn map
+        let non_mut_string: Vec<String> = non_mut_args
+            .iter()
+            .map(|arg| arg.ident.to_string())
+            .collect();
+
+        let mut_under: Vec<syn::PatIdent> = mut_args
+            .iter()
+            .map(|arg| {
+                let mut a = arg.clone();
+                a.ident = syn::Ident::new(&format!("_{}", arg.ident), pc2::Span::call_site());
+                a
+            })
+            .collect();
+        // vec of ident strings for print Fn map
+        let mut_string: Vec<String> = mut_args.iter().map(|arg| arg.ident.to_string()).collect();
+
+        Self {
+            non_mut_args,
+            mut_args,
+            mut_under,
+            non_mut_under,
+            mut_string,
+            non_mut_string,
+        }
+    }
+
+    fn arg_string(&self) -> (Vec<String>, Vec<String>) {
+        (self.mut_string.clone(), self.non_mut_string.clone())
+    }
+
+    fn arg_private(&self) -> (Vec<syn::PatIdent>, Vec<syn::PatIdent>) {
+        (self.mut_under.clone(), self.non_mut_under.clone())
+    }
+
+    fn arg_original(&self) -> (Vec<syn::PatIdent>, Vec<syn::PatIdent>) {
+        (self.mut_args.clone(), self.non_mut_args.clone())
+    }
+
+    fn new_mut_decl(&self) -> (Vec<syn::PatIdent>, Vec<syn::PatIdent>, Vec<String>) {
+        let (m_a, _) = self.arg_original();
+        let (p_a, _) = self.arg_private();
+        let (s_a, _) = self.arg_string();
+        (m_a, p_a, s_a)
+    }
+
+    fn new_decl(&self) -> (Vec<syn::PatIdent>, Vec<syn::PatIdent>, Vec<String>) {
+        let (_, o_a) = self.arg_original();
+        let (_, p_a) = self.arg_private();
+        let (_, s_a) = self.arg_string();
+        (o_a, p_a, s_a)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Args {
     org_args: Vec<syn::FnArg>,
     mut_args: Vec<syn::FnArg>,
     args: Vec<syn::FnArg>,
+    mut_under: Vec<syn::PatIdent>,
     scope: String,
 }
 
@@ -36,6 +110,7 @@ impl Args {
         let mut ret = Args {
             org_args,
             mut_args: Vec::new(),
+            mut_under: Vec::new(),
             args: Vec::new(),
             scope,
         };
@@ -68,57 +143,36 @@ impl Args {
         }
     }
 
-    fn capture_args(
-        &mut self,
-        dbg: &mut dbg_collect::DebugCollect,
-    ) -> (
-        Vec<syn::PatIdent>,
-        Vec<syn::PatIdent>,
-        Vec<syn::PatIdent>,
-        Vec<String>,
-    ) {
-        let mut p_args: Vec<(syn::PatIdent, syn::Type)> = Vec::new();
-        for arg in self.org_args.iter() {
-            match &arg {
-                syn::FnArg::Captured(syn::ArgCaptured {
-                    pat: syn::Pat::Ident(arg_id),
-                    ty,
-                    ..
-                }) => {
-                    // println!("{:#?}", ty);
-                    p_args.push((arg_id.clone(), ty.clone()));
-                    let name = arg_id.ident.clone().to_string();
-                    let scope = self.scope.clone();
-                    // TODO remove expect for something better
-                    let am = dbg_collect::ArgMeta::new(
-                        self.expand_arg_ty(&ty).expect("expand type failed"),
-                        scope,
-                    );
-                    dbg.args.insert(name, am);
-                }
-                ar => println!("ARGS {:#?}", ar),
-            }
-        }
-        // vec of ident strings for print Fn map
-        let arg_str: Vec<String> = p_args
+    fn capture_args(&self, dbg: &mut dbg_collect::DebugCollect) -> ArgIdents {
+        self.org_args()
             .iter()
-            .map(|(arg, _)| arg.ident.to_string())
-            .collect();
-        // unchanged arg ident
-        let arg_id: Vec<syn::PatIdent> = p_args.iter().map(|(arg, _)| arg).cloned().collect();
+            .map(expand_fn_arg)
+            .for_each(|(arg_id, ty)| {
+                let name = arg_id.ident.clone().to_string();
+                let scope = self.scope.clone();
+                // TODO remove expect for something better
+                let am = dbg_collect::ArgMeta::new(
+                    self.expand_arg_ty(&ty).expect("expand type failed"),
+                    scope,
+                );
+                dbg.args.insert(name, am);
+            });
 
-        // changed arg ident: '_arg'
-        let capt_arg: Vec<syn::PatIdent> = p_args
+        let m_args: Vec<syn::PatIdent> = self
+            .mut_args()
             .iter()
-            .map(|(arg, _)| {
-                let mut a = arg.clone();
-                a.ident = syn::Ident::new(&format!("_{}", arg.ident), pc2::Span::call_site());
-                a
-            })
+            .map(expand_fn_arg)
+            .map(|(id, _ty)| id)
             .collect();
-        // clone for use in print Fn as ident
-        // TODO this is terible why do i have to do this
-        (capt_arg.clone(), arg_id, capt_arg.clone(), arg_str)
+
+        let non_m_args: Vec<syn::PatIdent> = self
+            .non_mut_args()
+            .iter()
+            .map(expand_fn_arg)
+            .map(|(id, _ty)| id)
+            .collect();
+
+        ArgIdents::new(non_m_args, m_args)
     }
 
     fn expand_arg_ty(&self, ty: &syn::Type) -> Option<String> {
@@ -170,6 +224,18 @@ impl Args {
                 panic!()
             }
         }
+    }
+
+    pub(crate) fn mut_args(&self) -> Vec<syn::FnArg> {
+        self.mut_args.clone()
+    }
+
+    pub(crate) fn non_mut_args(&self) -> Vec<syn::FnArg> {
+        self.args.clone()
+    }
+
+    pub(crate) fn org_args(&self) -> Vec<syn::FnArg> {
+        self.org_args.clone()
     }
 }
 
@@ -252,7 +318,7 @@ impl VisitStmt {
     }
 
     fn is_mut_var(&self, stmt: &syn::Stmt) -> bool {
-        self.mut_args.iter().enumerate().any(|(i, arg)| {
+        self.mut_args.iter().any(|arg| {
             let (id, ty) = expand_fn_arg(arg);
             if let Some(vars_used) = self.expand_stmt(stmt) {
                 if id.ident == vars_used {
@@ -266,22 +332,26 @@ impl VisitStmt {
         })
     }
 
-    // fn split_for_use(&self, s: &syn::Stmt) -> (syn::Ident, syn::Expr) {
-    //     let id = self.expand_stmt(s);
+    fn split_for_meth_call(&self, s: &syn::Stmt) -> Option<syn::Stmt> {
+        // println!("METHCALL {:#?}", s);
+        if let syn::Stmt::Semi(syn::Expr::MethodCall(m_call), semi) = s {
+            let mut ident = self.expand_expr(&m_call.receiver).unwrap();
+            ident = syn::Ident::new(&format!("_{}", ident), pc2::Span::call_site());
 
-    //     (id, rest)
-    // }
-
-    fn replace_stmt(&self, s: &mut syn::Stmt) {
-        let x = s.clone();
-        //let (id, action) = self.split_for_use(&s);
-        let new_stmt: syn::Stmt = parse_quote! {
-            #x
-        };
-        *s = new_stmt;
+            let method = m_call.method.clone();
+            let args = m_call.args.clone();
+            Some(parse_quote! { unsafe { (*#ident.get()).#method(#args); } })
+        } else {
+            None
+        }
     }
 
-    fn compare_mut_stmt(&self, f: Box<(dyn FnMut(Vec<&syn::FnArg>) + '_)>) {}
+    fn replace_stmt(&self, s: &mut syn::Stmt) {
+        // TODO
+        let new_stmt = self.split_for_meth_call(&s).unwrap();
+
+        *s = new_stmt;
+    }
 
     fn visit_stmts_mut(&self) {
         self.stmts.iter().for_each(|s| {
@@ -293,12 +363,16 @@ impl VisitStmt {
     }
 
     fn body(&self) -> syn::Block {
-        let s: Vec<syn::Stmt> = self.stmts.iter().map(|s| {
-            let stmt = s.borrow().clone();
-            stmt
-        }).collect();
+        let s: Vec<syn::Stmt> = self
+            .stmts
+            .iter()
+            .map(|s| {
+                let stmt = s.borrow().clone();
+                stmt
+            })
+            .collect();
 
-        parse_quote!{ { #(#s)* } }
+        parse_quote! { { #(#s)* } }
     }
 
     fn iter(&self) -> impl Iterator<Item = &RefCell<syn::Stmt>> {
@@ -338,14 +412,7 @@ impl Func {
         self._fn
     }
 
-    fn capture_args(
-        &mut self,
-    ) -> (
-        Vec<syn::PatIdent>,
-        Vec<syn::PatIdent>,
-        Vec<syn::PatIdent>,
-        Vec<String>,
-    ) {
+    fn capture_args(&mut self) -> ArgIdents {
         self.args.capture_args(&mut self.dbg_col)
     }
 
@@ -362,7 +429,14 @@ impl Func {
         // serialize the obj to 'send' to the running program
         let ser = serde_json::to_string(&self.dbg_col).unwrap();
 
-        let (capt_arg, arg_id, capt_clone, arg_str) = self.capture_args();
+        let args = self.capture_args();
+        let (mut_arg, under_mut, mut_str) = args.new_mut_decl();
+        // TODO
+        // anyway to avoid this
+        let under_mut2 = under_mut.clone();
+
+        let (org_arg, under_arg, arg_str) = args.new_decl();
+        let under_arg2 = under_arg.clone();
 
         let body = self.stmts.body();
         self._fn.block = Box::new(parse_quote! ({
@@ -373,9 +447,20 @@ impl Func {
 
                 let mut print_map: std::collections::HashMap<String, PrintFn> = std::collections::HashMap::new();
                 #(
-                    let #capt_arg = std::cell::UnsafeCell::new(#arg_id);
-                    VARS.with(|var| var.set_ref(&#capt_clone));
-                    let print_fn = dbg_collect::PrintFn(Box::new(move || {
+                    let #under_arg = #org_arg.clone();
+
+                    let print_fn = dbg_collect::PrintFn(Box::new(|| {
+                        println!("{:?}", #under_arg2.as_debug())
+                    }));
+
+                    print_map.insert(#arg_str.into(), print_fn);
+
+                )*
+
+                #(
+                    let #under_mut = std::cell::UnsafeCell::new(#mut_arg);
+                    VARS.with(|var| var.set_ref(&#under_mut2));
+                    let print_fn = dbg_collect::PrintFn(Box::new(|| {
                         VARS.with(|var| unsafe {
                             if let Some(v) = var.0.get() {
                                 let ptr = &*(v.as_ref().get());
@@ -385,10 +470,11 @@ impl Func {
                             }
                         });
                     }));
-                    print_map.insert(#arg_str.into(), print_fn);
+                    print_map.insert(#mut_str.into(), print_fn);
                 )*
                 let dbg = dbg_collect::DebugCollect::deserialize(#ser);
-                #body
+                let original_return = #body;
+                original_return
             })();
         }));
     }
@@ -414,7 +500,9 @@ impl Func {
             .collect();
     }
 
-    fn visit_stmts_mut(&mut self) {}
+    fn visit_stmts_mut(&mut self) {
+        self.stmts.visit_stmts_mut()
+    }
 }
 
 ///
