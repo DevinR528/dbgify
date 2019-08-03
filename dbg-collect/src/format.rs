@@ -32,9 +32,9 @@ impl ArgMeta {
     }
 }
 
-pub struct PrintFn<'a>(pub std::boxed::Box<(dyn std::ops::Fn() + 'a)>);
-impl<'a> std::ops::Deref for PrintFn<'a> {
-    type Target = (dyn Fn() + 'a);
+pub struct PrintFn(pub Box<(dyn Fn())>);
+impl std::ops::Deref for PrintFn {
+    type Target = (dyn Fn());
 
     fn deref(&self) -> &Self::Target {
         &(*self.0)
@@ -78,7 +78,7 @@ impl DebugCollect {
         let d: DebugCollect = serde_json::from_str(s).unwrap();
         d
     }
-    pub fn step(&self, cbs: &HashMap<String, PrintFn<'_>>) -> std::io::Result<()> {
+    pub fn step(&self, cbs: &HashMap<String, PrintFn>) -> std::io::Result<()> {
         println!("type var name or tab to auto-complete");
         let print_loop = || -> std::io::Result<bool> {
             // put this in struct

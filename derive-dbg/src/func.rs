@@ -421,15 +421,15 @@ impl Func {
     }
 
     fn set_body(&mut self) {
+        // must be done before serialization as it fills dbg_collect
+        let args = self.capture_args();
+        // serialize the obj to 'send' to the running program
+        let ser = serde_json::to_string(&self.dbg_col).unwrap();
+
         let ret = match &self._fn.decl.output {
             syn::ReturnType::Default => quote!(-> ()),
             out @ syn::ReturnType::Type(..) => quote!(#out),
         };
-
-        // serialize the obj to 'send' to the running program
-        let ser = serde_json::to_string(&self.dbg_col).unwrap();
-
-        let args = self.capture_args();
         let (mut_arg, under_mut, mut_str) = args.new_mut_decl();
         // TODO
         // anyway to avoid this
@@ -443,13 +443,13 @@ impl Func {
             std::thread_local! {
                 static VARS: dbg_collect::VarRef = dbg_collect::VarRef::new();
             }
-            let __result = (|| #ret {
+            let __result = (move || #ret {
 
                 let mut print_map: std::collections::HashMap<String, PrintFn> = std::collections::HashMap::new();
                 #(
-                    let #under_arg = #org_arg.clone();
+                    let #under_arg = #org_arg;
 
-                    let print_fn = dbg_collect::PrintFn(Box::new(|| {
+                    let print_fn = dbg_collect::PrintFn(Box::new(move || {
                         println!("{:?}", #under_arg2.as_debug())
                     }));
 
@@ -473,9 +473,9 @@ impl Func {
                     print_map.insert(#mut_str.into(), print_fn);
                 )*
                 let dbg = dbg_collect::DebugCollect::deserialize(#ser);
-                let original_return = #body;
-                original_return
+                #body
             })();
+            __result
         }));
     }
 
