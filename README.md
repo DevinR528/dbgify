@@ -37,7 +37,7 @@ and scope awareness.
 
 ##Problems to Solve
 threads
-impl methods - should this be possible
+impl methods
 scopes - with RAII and the borrow checker this might get ugly.
 support step-in like functionality (possibly by creating another attr macro)
 and much more...

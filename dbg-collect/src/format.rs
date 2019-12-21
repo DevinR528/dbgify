@@ -13,6 +13,10 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use std::cell::{Cell, UnsafeCell};
 use std::ptr::NonNull;
 
+pub trait Debugable {
+    fn as_debug(self: &'_ Self) -> &'_ dyn Debug;
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ArgMeta {
     ty_str: String,
@@ -33,6 +37,7 @@ impl ArgMeta {
 }
 
 pub struct PrintFn(pub Box<(dyn Fn())>);
+
 impl std::ops::Deref for PrintFn {
     type Target = (dyn Fn());
 
@@ -41,9 +46,6 @@ impl std::ops::Deref for PrintFn {
     }
 }
 
-pub trait Debugable {
-    fn as_debug(self: &'_ Self) -> &'_ dyn Debug;
-}
 impl<T> Debugable for T {
     default fn as_debug(self: &'_ Self) -> &'_ dyn Debug {
         struct DefaultDebug;

@@ -61,3 +61,34 @@ impl<'a> std::iter::Iterator for IterStmtMut<'a> {
 
     }
 }
+
+use std::collections::HashMap;
+ use std::ops::Deref;
+ 
+struct Func(Box<dyn Fn()>);
+impl Deref for Func {
+    type Target = dyn Fn();
+    fn deref(&self) -> &Self::Target {
+        &(*self.0)
+    }
+}
+
+fn main () {
+    fn test(x: &mut String, y: usize) {
+        
+        let func = (move || {
+            let mut map = HashMap::new();
+            let _y = y;
+            let _x = x.clone();
+            map.insert("x", Func(Box::new(move || println!("{}", _x))));
+            map.insert("y", Func(Box::new(move || println!("{}", _y))));
+            for (k, v) in map.iter() {
+                v();
+            }
+        })();
+        
+    }
+    
+    let mut x = "hello".to_string();
+    test(&mut x, 10)
+}
